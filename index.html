@@ -72,7 +72,20 @@
 
 <script>
 /* ---------------- Config ---------------- */
-const CELL=10, GRID_W=52, GRID_H=36, TICK_MS=110;
+const CELL=10, GRID_W=52, GRID_H=36;
+
+// Speed-Ramp Parameter
+const BASE_TICK_MS = 110;     // Startgeschwindigkeit (ms)
+const SPEEDUP_EVERY = 3;      // alle 3 gefressenen $ schneller werden
+const SPEEDUP_FACTOR = 0.92;  // Multiplikator pro Stufe (0.92 = ~8% schneller)
+const MIN_TICK_MS = 40;       // Untergrenze, damit es nicht „unspielbar“ wird
+
+function getTickMs(score){
+  const stages = Math.floor(score / SPEEDUP_EVERY);
+  const ms = BASE_TICK_MS * Math.pow(SPEEDUP_FACTOR, stages);
+  return Math.max(MIN_TICK_MS, Math.round(ms));
+}
+
 
 /* Startkörper: "<<< " (3x < und ein Leerzeichen) */
 const START_LETTERS = ["T","L","G","G"];
@@ -158,7 +171,7 @@ function restart(){ pause(); resetGame(); start(); }
 function tick(){
   elapsed = Date.now()-startTs;
   step(); draw(); updateHUD();
-  if(running) timerId=setTimeout(tick,TICK_MS);
+  if(running) timerId = setTimeout(tick, getTickMs(score));
 }
 
 function step(){
