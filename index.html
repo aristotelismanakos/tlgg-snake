@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Poem Snake — TLGG</title>
+<style>
+  :root{--bg:#0b0e11;--panel:#11151a;--border:#1f242b;--fg:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--ok:#2ea043;--warn:#d29922;--bad:#f85149}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial}
+  .wrap{max-width:1100px;margin:0 auto;padding:16px}
+  h1{margin:0 0 10px 0;font-size:20px;font-weight:600}
+  .grid{display:grid;grid-template-columns:2fr 1fr;gap:12px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px}
+  #hud{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);margin-bottom:8px}
+  button{background:#141a21;color:var(--fg);border:1px solid #2c3440;border-radius:10px;padding:8px 12px;cursor:pointer}
+  button:hover{border-color:#3f4957}
+  .pill{padding:4px 8px;border-radius:999px;background:#0f1317;border:1px solid #1d2330;font-size:12px;color:var(--muted)}
+  canvas{width:100%;height:auto;display:block;background:#0a0d10;border-radius:8px;image-rendering:pixelated}
+  #poemBox{white-space:pre-wrap;line-height:1.25;min-height:360px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th,td{border-bottom:1px solid var(--border);padding:6px 4px;font-size:13px;text-align:left;color:var(--fg)}
+  th{color:var(--muted);font-weight:600}
+  input[type="text"]{background:#0f1317;color:var(--fg);border:1px solid #1d2330;border-radius:8px;padding:6px 8px;min-width:160px}
+  .footer{margin-top:8px;font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Poem Snake — TLGG</h1>
+
+  <div id="hud" class="row">
+    <input id="playerName" type="text" placeholder="Your name" />
+    <button id="startBtn">Start</button>
+    <button id="pauseBtn">Pause</button>
+    <button id="restartBtn">Restart</button>
+    <span class="pill">Controls: Arrow Keys • P = Pause • R = Restart</span>
+    <span class="pill">Eat <b>$</b> to grow the poem.</span>
+    <span id="status" class="pill">Ready</span>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <canvas id="game" width="520" height="360"></canvas>
+      <div class="footer row">
+        <span id="scorePill" class="pill">Score: 0</span>
+        <span id="timePill" class="pill">Time: 0s</span>
+        <span id="progressPill" class="pill">Poem: 0%</span>
+        <span id="bestPill" class="pill">Best: —</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div id="poemBox"></div>
+      <div id="winMsg" class="ok" style="display:none;margin-top:8px;"></div>
+
+      <div style="margin-top:12px">
+        <div class="row">
+          <h3 style="margin:0;font-size:14px;color:var(--muted)">Leaderboard (local)</h3>
+          <button id="clearLbBtn" title="Clear local leaderboard">Clear</button>
+        </div>
+        <table id="lbTable">
+          <thead><tr><th>#</th><th>Name</th><th>Time</th><th>Score</th><th>Date</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------------- Config ---------------- */
+const CELL=10, GRID_W=52, GRID_H=36, TICK_MS=110;
+const POEM=[
+ "The tide strikes, the wind bends the pines,",
+ "yet the beast devours and grows-",
+ "no hunger eased, no knees touched.",
+ "",
+ "TLGG comes, the forest gathers,",
+ "ropes of voices bind its legs,",
+ "hands of many seal its mouth.",
+ "",
+ "Once endless jaws fall silent,",
+ "shadows of greed turn to dust-",
+ "social can everything.",
+ "",
+ "But not everything",
+ "can social."
+].join("\n"); // echte Umbrüche
+
+/* --------------- State ------------------ */
+let canvas, ctx;
+let snake, letters, dir, food, running=false, timerId=null;
+let score=0, poemIdx=0, poemRevealed="", startTs=null, elapsed=0;
+
+/* --------------- Leaderboard (localStorage) -------------- */
+const LB_KEY="poemsnake_leaderboard_v1"; // array of {name,timeSec,score,dateISO}
+function loadLB(){ try{ return JSON.parse(localStorage.getItem(LB_KEY)||"[]"); }catch{ return []; } }
+function saveLB(items){ localStorage.setItem(LB_KEY, JSON.stringify(items)); }
+function addLBEntry(name,timeSec,score){
+  const items=loadLB();
+  items.push({name:name||"Anonymous", timeSec, score, dateISO:new Date().toISOString()});
+  items.sort((a,b)=>a.timeSec-b.timeSec || b.score-a.score || (new Date(b.dateISO)-new Date(a.dateISO)));
+  saveLB(items.slice(0,10)); // Top 10
+  renderLB();
+}
+function renderLB(){
+  const items=loadLB();
+  const tb=document.querySelector("#lbTable tbody");
+  tb.innerHTML="";
+  items.forEach((it,i)=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${i+1}</td><td>${escapeHtml(it.name)}</td><td>${it.timeSec}s</td><td>${it.score}</td><td>${new Date(it.dateISO).toLocaleString()}</td>`;
+    tb.appendChild(tr);
+  });
+  document.getElementById('bestPill').textContent = items.length? `Best: ${items[0].timeSec}s (${items[0].name})` : "Best: —";
+}
+function escapeHtml(s){ return s.replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m])); }
+
+/* ----------------- Game ------------------ */
+function resetGame(){
+  snake=[
+    {x:12, y:Math.floor(GRID_H/2)}, // T
+    {x:11, y:Math.floor(GRID_H/2)}, // L
+    {x:10, y:Math.floor(GRID_H/2)}, // G
+    {x: 9, y:Math.floor(GRID_H/2)}, // G
+  ];
+  letters=["T","L","G","G"];
+  dir={x:1,y:0}; // right
+  food=placeFood();
+  score=0; poemIdx=0; poemRevealed=""; elapsed=0;
+  startTs=Date.now();
+  document.getElementById("poemBox").textContent="";
+  document.getElementById("winMsg").style.display="none";
+  setStatus("Ready");
+  draw(); updateHUD();
+}
+function placeFood(){
+  while(true){
+    const x=1+Math.floor(Math.random()*(GRID_W-2));
+    const y=1+Math.floor(Math.random()*(GRID_H-2));
+    if(!snake.some(s=>s.x===x&&s.y===y)) return {x,y};
+  }
+}
+function start(){ if(running) return; running=true; setStatus("Running"); tick(); }
+function pause(){ running=false; setStatus("Paused","warn"); if(timerId){clearTimeout(timerId); timerId=null;} }
+function restart(){ pause(); resetGame(); start(); }
+function setStatus(t,cls){ const el=document.getElementById("status"); el.textContent=t; el.className="pill"+(cls?" "+cls:""); }
+
+function tick(){
+  const now=Date.now(); elapsed=now-startTs;
+  step(); draw(); updateHUD();
+  if(running) timerId=setTimeout(tick,TICK_MS);
+}
+function step(){
+  const head={...snake[0]}; head.x+=dir.x; head.y+=dir.y;
+
+  // collisions (walls or self)
+  if(head.x<=0 || head.x>=GRID_W-1 || head.y<=0 || head.y>=GRID_H-1 || snake.some((s,i)=>i>0&&s.x===head.x&&s.y===head.y)){
+    gameOver(); return;
+  }
+  snake.unshift(head);
+
+  // eat?
+  if(head.x===food.x && head.y===food.y){
+    score++;
+    if(poemIdx<POEM.length){
+      const ch=POEM[poemIdx++]; letters.push(ch); poemRevealed+=ch;
+      document.getElementById("poemBox").textContent=poemRevealed; // echte Umbrüche sichtbar
+      if(poemIdx===POEM.length) onPoemCompleted();
+    } else {
+      letters.push("G"); // fallback
+    }
+    food=placeFood();
+  } else {
+    snake.pop();
+  }
+}
+function onPoemCompleted(){
+  setStatus("Poem completed!","ok");
+  const secs=Math.floor(elapsed/1000);
+  const name=(document.getElementById("playerName").value||"Anonymous").trim().slice(0,40);
+  document.getElementById("winMsg").style.display="block";
+  document.getElementById("winMsg").innerHTML=`🏆 Winner: <b>${escapeHtml(name||"Anonymous")}</b> — finished in <b>${secs}s</b> with score <b>${score}</b>.`;
+  addLBEntry(name, secs, score);
+}
+function gameOver(){ setStatus("Game Over","bad"); pause(); }
+
+function updateHUD(){
+  document.getElementById("scorePill").textContent=`Score: ${score}`;
+  document.getElementById("timePill").textContent=`Time: ${Math.floor(elapsed/1000)}s`;
+  const pct=Math.floor(100*poemIdx/POEM.length);
+  document.getElementById("progressPill").textContent=`Poem: ${pct}%`;
+}
+
+/* --------------- Rendering ---------------- */
+function draw(){
+  ctx.fillStyle="#0a0d10"; ctx.fillRect(0,0,canvas.width,canvas.height);
+  // border
+  ctx.fillStyle="#2c3440";
+  ctx.fillRect(0,0,canvas.width,CELL); // top
+  ctx.fillRect(0,canvas.height-CELL,canvas.width,CELL); // bottom
+  ctx.fillRect(0,0,CELL,canvas.height); // left
+  ctx.fillRect(canvas.width-CELL,0,CELL,canvas.height); // right
+
+  // food
+  ctx.fillStyle="#ff6b6b"; drawText("$", food.x, food.y);
+
+  // snake
+  for(let i=0;i<snake.length;i++){
+    const s=snake[i];
+    const ch=(i<letters.length)?letters[i]:"G";
+    if(ch==="\n"||ch==="\r") continue; // newline nicht zeichnen
+    ctx.fillStyle = (i===0) ? "#3fb950" : "#a5d6a7";
+    drawText(i===0?"T":ch, s.x, s.y);
+  }
+}
+function drawText(text,gx,gy){ ctx.font="10px monospace"; ctx.textBaseline="top"; ctx.fillText(text,gx*CELL,gy*CELL); }
+
+/* --------------- Input ------------------- */
+document.addEventListener("keydown",(e)=>{
+  if(e.key==="p"||e.key==="P"){ running?pause():start(); return; }
+  if(e.key==="r"||e.key==="R"){ restart(); return; }
+  const map={ArrowUp:{x:0,y:-1},ArrowDown:{x:0,y:1},ArrowLeft:{x:-1,y:0},ArrowRight:{x:1,y:0}};
+  if(map[e.key]){
+    const nd=map[e.key];
+    if(snake.length>1 && nd.x===-dir.x && nd.y===-dir.y) return; // no 180°
+    dir=nd;
+  }
+});
+document.getElementById("startBtn").onclick=start;
+document.getElementById("pauseBtn").onclick=()=>running?pause():start();
+document.getElementById("restartBtn").onclick=restart;
+document.getElementById("clearLbBtn").onclick=()=>{ localStorage.removeItem(LB_KEY); renderLB(); };
+
+/* --------------- Boot -------------------- */
+window.onload=function(){
+  canvas=document.getElementById("game"); ctx=canvas.getContext("2d");
+  renderLB(); resetGame();
+};
+</script>
+</body>
+</html>
